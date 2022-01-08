@@ -1,0 +1,675 @@
+---
+title: "RainPredict GLM"
+author: "ZhuQing ZHONG"
+date: "08/01/2022"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE,warning=FALSE, message=FALSE)
+```
+
+------------------------------------------------------------------------
+
+### Importer les paquets necessaires
+
+```{r import.necessary.package}
+library(readr)
+library(tidyverse)
+library(xtable)
+library(Hmisc)
+library(corrplot)
+library(MASS)
+library(rJava)
+library(glmulti)
+library("FactoMineR")
+library("factoextra")
+```
+
+### Importer les fichiers "meteo.train" et "meteo.test"
+
+```{r import.dataset.train.and.predict, echo=TRUE}
+meteo.train.initial=read.csv("meteo.train.csv")
+meteo.predict.initial=read.csv("meteo.test.csv")
+```
+
+```{r summary.import.dataset.train.and.predict, include=FALSE}
+summary(meteo.train.initial)
+```
+
+### Renommer les attributs avec les noms courts pour faciliter l’analyse
+
+```{r short.rename.the.variables, echo=TRUE}
+m=meteo.train.initial
+m=m %>% 
+  rename(
+    TEMP.Dmean.2m = Temperature.daily.mean..2.m.above.gnd.,
+    ReHumidity.Dmean.2m = Relative.Humidity.daily.mean..2.m.above.gnd.,
+    MSL.Pressure.Dmean = Mean.Sea.Level.Pressure.daily.mean..MSL.,
+    Ttl.Precipitation.Dsum = Total.Precipitation.daily.sum..sfc.,
+    Snowfall.Dsum = Snowfall.amount.raw.daily.sum..sfc.,
+    Ttl.Cld.Dmean = Total.Cloud.Cover.daily.mean..sfc.,
+    Highlay.Cld.Dmean = High.Cloud.Cover.daily.mean..high.cld.lay.,
+    Midlay.Cld.Dmean = Medium.Cloud.Cover.daily.mean..mid.cld.lay.,
+    Lowlay.Cld.Dmean = Low.Cloud.Cover.daily.mean..low.cld.lay.,
+    Sunshine.Dsum = Sunshine.Duration.daily.sum..sfc.,
+    Shortwave.Dsum = Shortwave.Radiation.daily.sum..sfc.,
+    WindSpeed.Dmean.10m = Wind.Speed.daily.mean..10.m.above.gnd.,
+    WindDirect.Dmean.10m = Wind.Direction.daily.mean..10.m.above.gnd.,
+    WindSpeed.Dmean.80m = Wind.Speed.daily.mean..80.m.above.gnd.,
+    WindDirect.Dmean.80m = Wind.Direction.daily.mean..80.m.above.gnd.,
+    WindSpeed.Dmean.900mb = Wind.Speed.daily.mean..900.mb.,
+    WindDirect.Dmean.900mb = Wind.Direction.daily.mean..900.mb.,
+    WindGust.Dmean = Wind.Gust.daily.mean..sfc.,
+    TEMP.Dmax.2m = Temperature.daily.max..2.m.above.gnd.,
+    TEMP.Dmin.2m = Temperature.daily.min..2.m.above.gnd.,
+    R.Humidity.Dmax.2m = Relative.Humidity.daily.max..2.m.above.gnd.,
+    R.Humidity.Dmin.2m = Relative.Humidity.daily.min..2.m.above.gnd.,
+    MSL.Pressure.Dmax = Mean.Sea.Level.Pressure.daily.max..MSL.,
+    MSL.Pressure.Dmin = Mean.Sea.Level.Pressure.daily.min..MSL.,
+    Ttl.Cld.Dmax = Total.Cloud.Cover.daily.max..sfc.,
+    Ttl.Cld.Dmin = Total.Cloud.Cover.daily.min..sfc.,
+    Highlay.Cld..Dmax = High.Cloud.Cover.daily.max..high.cld.lay.,
+    Highlay.Cld.Dmin = High.Cloud.Cover.daily.min..high.cld.lay.,
+    Midlay.Cld.Dmax = Medium.Cloud.Cover.daily.max..mid.cld.lay.,
+    Midlay.Cld.Dmin = Medium.Cloud.Cover.daily.min..mid.cld.lay.,
+    Lowlay.Cld.Dmax = Low.Cloud.Cover.daily.max..low.cld.lay.,
+    Lowlay.Cld.Dmin = Low.Cloud.Cover.daily.min..low.cld.lay.,
+    WindSpeed.Dmax.10m = Wind.Speed.daily.max..10.m.above.gnd.,
+    WindSpeed.Dmin.10m = Wind.Speed.daily.min..10.m.above.gnd.,
+    WindSpeed.Dmax.80m = Wind.Speed.daily.max..80.m.above.gnd.,
+    WindSpeed.Dmin.80m = Wind.Speed.daily.min..80.m.above.gnd.,
+    WindSpeed.Dmax.900mb = Wind.Speed.daily.max..900.mb.,
+    WindSpeed.Dmin.900mb = Wind.Speed.daily.min..900.mb.,
+    WindGust.Dmax = Wind.Gust.daily.max..sfc.,
+    WindGust.Dmin = Wind.Gust.daily.min..sfc.
+  )
+
+
+```
+
+```{r summary.m, include=FALSE}
+summary(m)
+
+```
+
+```{r correlation.table, echo=TRUE}
+cor.meteo=cor(m[,c(2:4,7:47)],use = 'complete')
+corrplot(cor.meteo,type="lower",number.cex=0.4,tl.cex=0.5,addCoef.col = 'black')
+```
+
+# Choix de modèle via la méthode 'Pas à Pas'
+
+Avec 43 variables présentes, il est très couteux au niveau de temp à sélectionner les covariables via la méthode exhaustive. Pour cela, j’utilise d’abord la fonction step() pour la choix des modèles prédictives de la manière suivante:
+1.	Modèle logit via ‘stepwise selection’ en basant sur la critère AIC
+2.	modèle probit via ‘stepwise selection’ en basant sur la critère AIC
+3.	modèle logit via ‘stepwise selection’ en basant sur la critère BIC
+4.	modèle logit via ‘backward selection’ en basant sur la critère AIC
+5.	modèle probit via ‘backward selection’ en basant sur la critère AIC
+6.	modèle logit via ‘backward selection’ en basant sur la critère BIC
+Je m’intéresse à
+•	comparer les modèles selectionnés par “stepwise selection” et “backward selection”
+•	comparer le modèle logit au modèle probit
+•	comparer les modèles séléctionnés basant sur la critère AIC aux ceux sélectionnés utilisant la critère BIC
+
+
+### Préparer la "full modèle logit" pour la 'step selection'
+
+```{r prepare.full.model.logit }
+m.glm=m[,c(2:4,7:47)]
+glm.logit=glm(pluie.demain~.,data=m.glm,family = binomial)
+summary(glm.logit)
+
+```
+
+### Préparer la "full modèle probit" pour la 'step selection'
+
+```{r prepare.full.model.probit}
+glm.probit=glm(pluie.demain~.,data=m.glm,family = binomial(link="probit"))
+summary(glm.probit)
+```
+
+### 
+
+## Stepwise Selection via step()
+
+### Stepwise Selection - 1. modèle logit en basant sur la critère AIC
+
+```{r stepwise.selection.model.logit.AIC, echo=TRUE,results='hide'}
+
+# modèle logit via 'stepwise selection' en basant sur la critère AIC 
+glm.stepw=step(glm(pluie.demain~1,data=m.glm,family = binomial), pluie.demain ~ Year + Month + Day + TEMP.Dmean.2m + ReHumidity.Dmean.2m + 
+                    MSL.Pressure.Dmean + Ttl.Precipitation.Dsum + Snowfall.Dsum + 
+                    Ttl.Cld.Dmean + Highlay.Cld.Dmean + Midlay.Cld.Dmean + Lowlay.Cld.Dmean + 
+                    Sunshine.Dsum + Shortwave.Dsum + WindSpeed.Dmean.10m + WindDirect.Dmean.10m + 
+                    WindSpeed.Dmean.80m + WindDirect.Dmean.80m + WindSpeed.Dmean.900mb + 
+                    WindDirect.Dmean.900mb + WindGust.Dmean + TEMP.Dmax.2m + 
+                    TEMP.Dmin.2m + R.Humidity.Dmax.2m + R.Humidity.Dmin.2m + 
+                    MSL.Pressure.Dmax + MSL.Pressure.Dmin + Ttl.Cld.Dmax + Ttl.Cld.Dmin + 
+                    Highlay.Cld..Dmax + Highlay.Cld.Dmin + Midlay.Cld.Dmax + 
+                    Midlay.Cld.Dmin + Lowlay.Cld.Dmax + Lowlay.Cld.Dmin + WindSpeed.Dmax.10m + 
+                    WindSpeed.Dmin.10m + WindSpeed.Dmax.80m + WindSpeed.Dmin.80m + 
+                    WindSpeed.Dmax.900mb + WindSpeed.Dmin.900mb + WindGust.Dmax + 
+                    WindGust.Dmin,data=m.glm,direction = "both")
+```
+
+```{r summary.stepwise.selection.model.logit.AIC}
+summary(glm.stepw)
+```
+
+### Stepwise Selection - 2. modèle probit en basant sur la critère AIC
+
+```{r stepwise.selection.model.probit.AIC,echo=TRUE,results='hide'}
+
+#modèle probit via  'stepwise selection' en basant sur la critère AIC
+glm.stepw_probit=step(glm(pluie.demain~1,data=m.glm,family = binomial(link = "probit")), pluie.demain ~ Year + Month + Day + TEMP.Dmean.2m + ReHumidity.Dmean.2m + 
+                 MSL.Pressure.Dmean + Ttl.Precipitation.Dsum + Snowfall.Dsum + 
+                 Ttl.Cld.Dmean + Highlay.Cld.Dmean + Midlay.Cld.Dmean + Lowlay.Cld.Dmean + 
+                 Sunshine.Dsum + Shortwave.Dsum + WindSpeed.Dmean.10m + WindDirect.Dmean.10m + 
+                 WindSpeed.Dmean.80m + WindDirect.Dmean.80m + WindSpeed.Dmean.900mb + 
+                 WindDirect.Dmean.900mb + WindGust.Dmean + TEMP.Dmax.2m + 
+                 TEMP.Dmin.2m + R.Humidity.Dmax.2m + R.Humidity.Dmin.2m + 
+                 MSL.Pressure.Dmax + MSL.Pressure.Dmin + Ttl.Cld.Dmax + Ttl.Cld.Dmin + 
+                 Highlay.Cld..Dmax + Highlay.Cld.Dmin + Midlay.Cld.Dmax + 
+                 Midlay.Cld.Dmin + Lowlay.Cld.Dmax + Lowlay.Cld.Dmin + WindSpeed.Dmax.10m + 
+                 WindSpeed.Dmin.10m + WindSpeed.Dmax.80m + WindSpeed.Dmin.80m + 
+                 WindSpeed.Dmax.900mb + WindSpeed.Dmin.900mb + WindGust.Dmax + 
+                 WindGust.Dmin,data=m.glm,direction = "both")
+
+```
+
+```{r summary.stepwise.selection.model.probit.AIC}
+summary(glm.stepw_probit)
+```
+
+### Stepwise Selection - 3. modèle logit en basant sur la critère BIC
+
+```{r stepwise.selection.model.logit.BIC,echo=TRUE,results='hide'}
+# modèle logit via 'stepwise selection' en basant sur la critère BIC 
+glm.stepw_BIC<- stepAIC(glm(pluie.demain~1,data=m.glm,family = binomial), pluie.demain ~ Year + Month + Day + TEMP.Dmean.2m + ReHumidity.Dmean.2m + 
+                          MSL.Pressure.Dmean + Ttl.Precipitation.Dsum + Snowfall.Dsum + 
+                          Ttl.Cld.Dmean + Highlay.Cld.Dmean + Midlay.Cld.Dmean + Lowlay.Cld.Dmean + 
+                          Sunshine.Dsum + Shortwave.Dsum + WindSpeed.Dmean.10m + WindDirect.Dmean.10m + 
+                          WindSpeed.Dmean.80m + WindDirect.Dmean.80m + WindSpeed.Dmean.900mb + 
+                          WindDirect.Dmean.900mb + WindGust.Dmean + TEMP.Dmax.2m + 
+                          TEMP.Dmin.2m + R.Humidity.Dmax.2m + R.Humidity.Dmin.2m + 
+                          MSL.Pressure.Dmax + MSL.Pressure.Dmin + Ttl.Cld.Dmax + Ttl.Cld.Dmin + 
+                          Highlay.Cld..Dmax + Highlay.Cld.Dmin + Midlay.Cld.Dmax + 
+                          Midlay.Cld.Dmin + Lowlay.Cld.Dmax + Lowlay.Cld.Dmin + WindSpeed.Dmax.10m + 
+                          WindSpeed.Dmin.10m + WindSpeed.Dmax.80m + WindSpeed.Dmin.80m + 
+                          WindSpeed.Dmax.900mb + WindSpeed.Dmin.900mb + WindGust.Dmax + 
+                          WindGust.Dmin,data=m.glm,direction = "both",k = log(nrow(m)))
+
+```
+
+```{r summary.stepwise.selection.model.logit.BIC}
+summary(glm.stepw_BIC)
+```
+
+## Backward Selection via step()
+
+### Backward Selection - 4. modèle logit en basant sur la critère AIC
+
+```{r backward.selection.model.logit.AIC,echo=FALSE,echo=TRUE,results='hide'}
+#modèle logit via 'backward selection' en basant sur la critère AIC
+glm.backw=step(glm.logit,direction = "backward")
+```
+
+```{r summary.backward.selection.model.logit.AIC}
+summary(glm.backw)
+```
+
+### Backward Selection - 5. modèle probit en basant sur la critère AIC
+
+```{r backward.selection.model.probit.AIC,echo=TRUE, results='hide'}
+#modèle probit via  'backward selection' en basant sur la critère AIC
+glm.backw_probit=step(glm.probit,direction = "backward")
+```
+
+```{r summary.backward.selection.model.probit.AIC}
+summary(glm.backw_probit)
+```
+
+### Backward Selection - 6. modèle logit en basant sur la critère BIC
+
+```{r backward.selection.model.logit.BIC,echo=TRUE,results='hide'}
+#modèle logit via 'backward selection' en basant sur la critère BIC 
+glm.backw_BIC=step(glm.logit,direction = "backward",k = log(nrow(m)))
+```
+
+```{r summary.backward.selection.model.logit.BIC}
+summary(glm.backw_BIC)
+```
+
+## Comparaison de 6 modèles selectionnés par step()
+
+Je vérifie par les codes ci-dessous :
+
+-   AIC de chaque modèle sélectionné par step()
+
+-   Modèle Utile ? : la différence entre ‘Null Deviance’ et ‘Residual Deviance’ par rapport le nombre des variables sélectionnés
+
+-   Modèle suffisant ? : P-value du test khi-deux sur le rapport de vraisemblance entre le modèle sélectionné(Mk) et celui saturé(Msat)
+
+```{r compare.6models.by.step.method,results='hold'}
+# vérifier AIC des 6 modèles selectionés par la méthode de 'pas à pas'
+# vérifier Null Deviance et Residual Deviance
+print("Modèle 1 logit basant sur AIC 'stepwise selection':")
+sprintf(" 'AIC' %f, 'P-value Test Khi2' %f, 'nb variable' %d",AIC(glm.stepw), pchisq(glm.stepw$deviance,glm.stepw$df.residual,lower=F),I(glm.stepw$df.null-glm.stepw$df.residual))
+
+print("Modèle 2 probit basant sur AIC 'stepwise selection':")
+sprintf(" 'AIC' %f, 'P-value Test Khi2' %f, 'nb variable' %d",AIC(glm.stepw_probit), pchisq(glm.stepw_probit$deviance,glm.stepw_probit$df.residual,lower=F),I(glm.stepw_probit$df.null-glm.stepw$df.residual))
+
+print("Modèle 3 logit basant sur BIC 'stepwise selection':")
+sprintf(" 'AIC' %f, 'P-value Test Khi2' %f, 'nb variable' %d",AIC(glm.stepw_BIC), pchisq(glm.stepw_BIC$deviance,glm.stepw_BIC$df.residual,lower=F),I(glm.stepw_BIC$df.null-glm.stepw_BIC$df.residual))
+
+print("Modèle 4 logit basant sur AIC 'backward selection':")
+sprintf(" 'AIC' %f, 'P-value Test Khi2' %f, 'nb variable' %d",AIC(glm.backw), pchisq(glm.backw$deviance,glm.backw$df.residual,lower=F),I(glm.backw$df.null-glm.backw$df.residual))
+
+print("Modèle 5 probit basant sur AIC 'backward selection':")
+sprintf(" 'AIC' %f, 'P-value Test Khi2' %f, 'nb variable' %d",AIC(glm.backw_probit), pchisq(glm.backw_probit$deviance,glm.backw_probit$df.residual,lower=F),I(glm.backw_probit$df.null-glm.backw_probit$df.residual))
+
+print("Modèle 6 logit basant sur BIC 'backward selection':")
+sprintf(" 'AIC' %f, 'P-value Test Khi2' %f, 'nb variable' %d",AIC(glm.backw_BIC), pchisq(glm.backw_BIC$deviance,glm.backw_BIC$df.residual,lower=F),I(glm.backw_BIC$df.null-glm.backw_BIC$df.residual))
+
+
+```
+
+### Selection Stepwise VS Selection Backward (step()):
+
+Les 3 modèles sélectionnés par le mode ‘backward’ paraissent mieux que ceux sélectionnés par le mode ‘stepwise’. Parce que leur valeur AIC est plus petit . Et leur p-valeur du test khi-deux est plus grande, ce qui indique le résidu des modèles ‘backward sélectionnés’ est plus petit. Néanmoins, la ‘backward’ selection’ inclure plus de covariables que ‘stepwise selection’. 
+
+### Modèle Logit VS Modèle Probit(step()):
+
+Par la sélection stepwise, le modèle probit parait mieux que celui de logit. Alors que c’est l’inverse dans le mode de selection ‘backward’. Les deux types sont proches, en comparant leurs valeurs AIC et les p-valeur du test khi-deux.
+
+### Modèle basant sur AIC VS Modèle basant sur BIC (step()):
+
+Les 4 modèles sélectionnés en basant sur la critère AIC sont mieux que ceux en basant sur la critère BIC, d’un point de vu de valeur AIC et de test khi-deux. Mais AIC a choisi le grand modèle. 
+
+### Quelles modèles à choisir, et que faire pour pour la suite ?
+
+Tous ces six modèles sont utiles, car la différence entre ‘Null Deviance’ et ‘Residual Deviance’ est assez grande par rapport au nombre des covariables sélectionnées. Néanmoins, aucun n’est un modèle suffisant, car leur p-valeur du test khi-deux des six modèles est tous inférieur à 5%. Il devrait manquer les covariables à inclure dans le modèle.
+
+J’observe les points suivants, en comparant les deux modèles logit selectionnés par le mode ‘backward’ :
+
+-   Le modèle basant sur AIC(glm.backw) a 7 covariables en plus que celui basant sur BIC(glm.backw_BIC), et a néanmoins gagné seulement 12 sur la valeur AIC du modèle. 
+
+-   Le modèle basant sur AIC a sélectionné déja 17 covariables parmi 43 variables en total.
+
+-   Certaines covariables sélectionnées semblent poser le problème de colinéarité ( eg: le coefficient de MSL.Pressure.Dmean est biaisé par rapport aux MSL.Pressure.Dmax et MSL.Pressure.Dmin )
+
+D’après ces observations, je me pose la question si le modèle basant sur AIC a sélectionné trop des variables par rapport au modèle basant sur BIC. Je suppose également qu’il manque l’impact de l’interaction entre les covariables dans le modèle sélectionné.
+
+-   tester la réduction des covariables ‘backward selectionnées’ dans le modéle basant sur AIC. 
+
+-   tester l’ajout de l’interaction entre les covariables dans le modèle via ‘glmutil()’
+
+# Préparation des modèles pour la validation croisée
+
+## Modèles avec la réduction des covariables
+
+La différence des covariables présente dans les deux modèles basant sur BIC et AIC  :
+
+1.  **Year( AIC, ! IN BIC)**
+
+2.  Snowfall.Dsum ( AIC, ! BIC, P-value\>0.5)
+
+3.  WindDirect.Dmean.80m (AIC, ! BIC, P-value\>0.1)
+
+4.  TEMP.Dmin.2m((AIC, ! BIC, P-value\>0.1))
+
+5.  **Ttl.Cld.Dmax (AIC, ! BIC)**
+
+6.  **Ttl.Cld.Dmin(AIC, ! BIC)**
+
+7.  **WindGust.Dmax(AIC, ! BIC)**
+
+```{r compare.variable.modelAICBIC, echo=TRUE,results='hide'}
+formula(glm.backw)
+formula(glm.backw_BIC)
+summary(glm.backw)
+```
+
+Parmis ces 7 covariables, je supprime ceux dont le coefficient est non-significative(p-value \> 0.5).
+
+J'obtiens le modèle **glm2_L1,** en supprimant 5 variables dans le modèle logit backward sélectionné basant  sur AIC (glm.backw):
+
+1.  Snowfall.Dsum
+
+2.  WindDirect.Dmean.80m
+
+3.  TEMP.Dmin.2m
+
+4.  Ttl.Cld.Dmax
+
+5.  Ttl.Cld.Dmin
+
+```{r delete.unsiginificant.coeffient }
+
+glm1_L1=glm(pluie.demain ~1 + TEMP.Dmean.2m + MSL.Pressure.Dmean + Midlay.Cld.Dmean + 
+             WindSpeed.Dmean.80m + WindDirect.Dmean.900mb + MSL.Pressure.Dmax + 
+             MSL.Pressure.Dmin + Midlay.Cld.Dmax + WindSpeed.Dmax.10m + 
+             WindSpeed.Dmin.10m+ WindGust.Dmax + Year+Ttl.Cld.Dmax+Ttl.Cld.Dmin,data=m.glm,family=binomial )
+
+summary(glm1_L1)
+
+# supprimer Ttl.Cld.Dmax, Ttl.Cld.Dmin, car p-value>0.05.
+glm1_L1=update(glm1_L1,~.-Ttl.Cld.Dmax -Ttl.Cld.Dmin)
+summary(glm1_L1)
+
+```
+
+D’après le test ANOVA suivant, la suppression des 5 covariables a fait perdre les informations. Le sous-modèle **glm1_L1**  est moins bien que **glm.backw** initialement selectionné. .
+
+Je vais revérifier ce point dans la chapitre \<validation croisée\> plus tard.
+
+```{r anova.compare.modelreduced}
+anova(glm1_L1,glm.backw,test="LRT")
+```
+
+## Modèles avec l'interaction entre les variables
+
+En utilisant glmulti() sur la modèle de base **glm1_L1**, j’obtiens le modèle **glm1_L2**, en prenant en compte de l’intéraction entre les variables. Les codes sont indiqués ci-dessous.
+
+Je ne peux pas produire un telle modèle à partir de **glm.backw** un utilisant glmulti(), car ce modèle backward sélectionné en basant sur AIC  contient trop des covariables.
+
+```{r get_L2model_by_glmulti,echo=TRUE,results='hide'}
+#formula(glm1_L1)
+glmulti.glm_L2 <- glmulti(pluie.demain ~ TEMP.Dmean.2m + MSL.Pressure.Dmean + Midlay.Cld.Dmean + WindSpeed.Dmean.80m + WindDirect.Dmean.900mb + MSL.Pressure.Dmax + MSL.Pressure.Dmin + Midlay.Cld.Dmax + WindSpeed.Dmax.10m + WindSpeed.Dmin.10m + WindGust.Dmax + Year, data = m.glm,
+                          level = 2,          #test interaction between covariables
+                          method = "g",            
+                          crit = "aic",       # AIC as criteria
+                          confsetsize = 3,        
+                          plotty = F, report = F,  
+                          fitfunction = "glm",
+                          family = binomial)  
+
+glmulti.glm_L2@formulas[[1]]
+summary(glmulti.glm_L2@objects[[1]])
+
+```
+
+```{r verify.L2model}
+glm1_L2=glm(formula = pluie.demain ~ 1 + TEMP.Dmean.2m + WindSpeed.Dmin.10m + MSL.Pressure.Dmean:TEMP.Dmean.2m + 
+    WindDirect.Dmean.900mb:TEMP.Dmean.2m + WindDirect.Dmean.900mb:MSL.Pressure.Dmean + 
+    MSL.Pressure.Dmax:MSL.Pressure.Dmean + MSL.Pressure.Dmax:Midlay.Cld.Dmean + 
+    MSL.Pressure.Dmax:WindSpeed.Dmean.80m + MSL.Pressure.Dmin:MSL.Pressure.Dmean + 
+    MSL.Pressure.Dmin:WindDirect.Dmean.900mb + Midlay.Cld.Dmax:TEMP.Dmean.2m + 
+    Midlay.Cld.Dmax:Midlay.Cld.Dmean + Midlay.Cld.Dmax:WindSpeed.Dmean.80m + 
+    WindSpeed.Dmax.10m:WindDirect.Dmean.900mb + WindSpeed.Dmax.10m:MSL.Pressure.Dmax + 
+    WindSpeed.Dmax.10m:MSL.Pressure.Dmin + WindSpeed.Dmax.10m:Midlay.Cld.Dmax + 
+    WindSpeed.Dmin.10m:TEMP.Dmean.2m + WindSpeed.Dmin.10m:MSL.Pressure.Dmean + 
+    WindSpeed.Dmin.10m:Midlay.Cld.Dmean + WindGust.Dmax:TEMP.Dmean.2m + 
+    WindGust.Dmax:MSL.Pressure.Dmean + WindGust.Dmax:WindDirect.Dmean.900mb + 
+    WindGust.Dmax:MSL.Pressure.Dmin + WindGust.Dmax:Midlay.Cld.Dmax + 
+    Year:TEMP.Dmean.2m + Year:MSL.Pressure.Dmean + Year:MSL.Pressure.Dmax + 
+    Year:WindSpeed.Dmin.10m, family = "binomial", data = m.glm)
+
+#step(glm1_L2)
+summary(glm1_L2)
+pchisq(glm1_L2$deviance,glm1_L2$df.residual,lower=F)
+
+```
+
+# Validation Croisée
+
+## 3 modèle pour la validation croisée
+
+A ce stade, je m’intéresse à tester les 3 modèles suivants par la validation croisée k-fold (k=6):
+
+| Modèle    | AIC     | Test Khi2 (Deviance) | Interaction covariable | Note                                                                                           |
+|-----------|---------|----------------------|------------------------|------------------------------------------------------------------------------------------------|
+| glm.backw | 1282.84 | 0.0415               | F                      | stepwise selection basant sur AIC                                                              |
+| glm1_L1   | 1290.01 | 0.0244               | F                      | réduire 5 variables de glm.backup                                                              |
+| glm1_L2   | 1218.77 | 0.4221               | T, Level2              | avec intération entre les covariables, obtenue en utilisant glmulti(),à partir de glm1_L1 |
+|           |         |                      |                        |                                                                                                |
+
+```{r verify.AIC.Khi2.3models.vc}
+AIC(glm.backw)
+AIC(glm1_L1)
+AIC(glm1_L2)
+pchisq(glm.backw$deviance,glm.backw$df.residual,lower=F)
+pchisq(glm1_L1$deviance,glm1_L1$df.residual,lower=F)
+pchisq(glm1_L2$deviance,glm1_L2$df.residual,lower=F)
+```
+
+## Cherche de seuil optimisé pour la prédiction.
+
+Avant de lancer la validation croisé k-fold, il y a besoin que je cherche le seuil optimisé pour la prédiction. Je suppose que le coût de faire une mauvaise prédiction sur une journée où il pleut, et sur une journée où il ne pleut pas est pareil. 
+Comme chaque échantillon des données (k-ième fold) va donner une courbe de coût différente, je crée une boucle ‘for’ pour vérifier la courbe de coût sur l’ensemble des données du fichier ‘meteo.train.csv’.
+
+
+```{r find.threshold.prediction}
+k = 6
+index = sample(1:k, nrow(m), replace=T)
+seuil = seq(0, 1, by=.01)
+
+# chercher le seuil optimisé pour le modèle 'glm.backw' 
+cout_glm.backw = rep(NA, length(seuil)*k)
+for(i in 1:k){
+  
+reg=glm(formula = formula(glm.backw),family = binomial,data=m.glm[index != i,])
+pred=predict(reg,newdata=m.glm[index==i,],type="response")
+
+
+  for(j in 1:length(seuil)){
+    
+    pred2 = (pred >= seuil[j])
+    cout_glm.backw[j+101*(i-1)] = 1 * sum(pred2 & m.glm[index==i,]$pluie.demain==FALSE) + 
+      1* sum(!pred2 & m.glm[index==i,]$pluie.demain==TRUE)
+    
+  }
+
+}
+cout_glm_backw.matrix=matrix(cout_glm.backw,byrow = T,nrow=k)
+plot(seuil,cout_glm_backw.matrix[1,],type = "l")
+par(new=T)
+plot(seuil,cout_glm_backw.matrix[2,],type = "l",col=2)
+par(new=T)
+plot(seuil,cout_glm_backw.matrix[3,],type = "l",col=3)
+par(new=T)
+plot(seuil,cout_glm_backw.matrix[4,],type = "l",col=4)
+par(new=T)
+plot(seuil,cout_glm_backw.matrix[5,],type = "l",col=5)
+par(new=T)
+plot(seuil,cout_glm_backw.matrix[6,],type = "l",col=6)
+
+
+# chercher le seuil optimisé pour le modèle 'glm1_L1' 
+cout_glm1_L1 = rep(NA, length(seuil)*k)
+for(i in 1:k){
+  
+reg=glm(formula = formula(glm1_L1),family = binomial,data=m.glm[index != i,])
+pred=predict(reg,newdata=m.glm[index==i,],type="response")
+
+
+  for(j in 1:length(seuil)){
+    
+    pred2 = (pred >= seuil[j])
+    cout_glm1_L1[j+101*(i-1)] = 1 * sum(pred2 & m.glm[index==i,]$pluie.demain==FALSE) + 1* sum(!pred2 & m.glm[index==i,]$pluie.demain==TRUE)
+    
+  }
+
+}
+cout_glm1_L1.matrix=matrix(cout_glm1_L1,byrow = T,nrow=k)
+plot(seuil,cout_glm1_L1.matrix[1,],type = "l")
+par(new=T)
+plot(seuil,cout_glm1_L1.matrix[2,],type = "l",col=2)
+par(new=T)
+plot(seuil,cout_glm1_L1.matrix[3,],type = "l",col=3)
+par(new=T)
+plot(seuil,cout_glm1_L1.matrix[4,],type = "l",col=4)
+par(new=T)
+plot(seuil,cout_glm1_L1.matrix[5,],type = "l",col=5)
+par(new=T)
+plot(seuil,cout_glm1_L1.matrix[6,],type = "l",col=6)
+
+# chercher le seuil optimisé pour le modèle 'glm1_L2' 
+cout_glm1_L2 = rep(NA, length(seuil)*k)
+for(i in 1:k){
+  
+reg=glm(formula = formula(glm1_L2),family = binomial,data=m.glm[index != i,])
+pred=predict(reg,newdata=m.glm[index==i,],type="response")
+
+
+  for(j in 1:length(seuil)){
+    
+    pred2 = (pred >= seuil[j])
+    cout_glm1_L2[j+101*(i-1)] = 1 * sum(pred2 & m.glm[index==i,]$pluie.demain==FALSE) + 1* sum(!pred2 & m.glm[index==i,]$pluie.demain==TRUE)
+    
+  }
+
+}
+cout_glm1_L2.matrix=matrix(cout_glm1_L2,byrow = T,nrow=k)
+plot(seuil,cout_glm1_L2.matrix[1,],type = "l")
+par(new=T)
+plot(seuil,cout_glm1_L2.matrix[2,],type = "l",col=2)
+par(new=T)
+plot(seuil,cout_glm1_L2.matrix[3,],type = "l",col=3)
+par(new=T)
+plot(seuil,cout_glm1_L2.matrix[4,],type = "l",col=4)
+par(new=T)
+plot(seuil,cout_glm1_L2.matrix[5,],type = "l",col=5)
+par(new=T)
+plot(seuil,cout_glm1_L2.matrix[6,],type = "l",col=6)
+
+```
+
+Depuis les graphs de courbe de coût, on voit que le seuil optimisé de prédiction se trouve aux alentours de 0.5 pour tous les trois modèles. Je vais tester les différentes valeurs entre 0.5 et 0.6 dans la validation croisée.
+
+## Validation croisée de k-fold modèle - glm.backw
+
+```{r glm.backw.c-validation}
+
+res.glm.backw_L1 = rep(NA, k)
+for(i in 1:k){
+  reg.glm.backw_L1 = glm(
+    formula = formula(glm.backw),
+    family = binomial,
+    data = m[index != i, ]
+  )
+  
+  
+  pred.glm.backw_L1 = predict(reg.glm.backw_L1, newdata=m[index == i, ],
+                                type="response")
+  
+  res.glm.backw_L1[i] = mean(m[index==i, "pluie.demain"] == (pred.glm.backw_L1 >.5), na.rm = T)
+  
+}
+plot(res.glm.backw_L1)
+mean(res.glm.backw_L1)
+```
+
+## Validation croisée de k-fold modèle - glm1_L1
+
+```{r glm1_L1.c-validation}
+res.glm1_L1 = rep(NA, k)
+for(i in 1:k){
+  reg.glm1_L1 = glm(
+    formula = formula(glm1_L1),
+    family = binomial,
+    data = m[index != i, ]
+  )
+  
+  
+  pred.glm1_L1 = predict(reg.glm1_L1, newdata=m[index == i, ],type="response")
+  
+  res.glm1_L1[i] = mean(m[index==i, "pluie.demain"] == (pred.glm1_L1 >.53), na.rm = T)
+  
+}
+plot(res.glm1_L1)
+mean(res.glm1_L1)
+
+```
+
+## Validation croisée de k-fold modèle glm1_L2
+
+```{r glm1_L2.c-validation}
+res.glm1_L2 = rep(NA, k)
+for(i in 1:k){
+  reg.glm1_L2 = glm(
+    formula = formula(glm1_L2),
+    family = binomial,
+    data = m[index != i, ]
+  )
+  
+  
+  pred.glm1_L2 = predict(reg.glm1_L2, newdata=m[index == i, ],type="response")
+  
+  res.glm1_L2[i] = mean(m[index==i, "pluie.demain"] == (pred.glm1_L2 >.53), na.rm = T)
+  
+}
+plot(res.glm1_L2)
+mean(res.glm1_L2)
+
+
+```
+
+## Choix de modèle prédictif via la validation croisée
+Le performance de prediction entre **glm.backw** et **glm_L1** est très proche dans la validation croisée. Le fait de réduire 5 covariables sur la modèle **glm.backw** semble pas changer la performance de prédiction. 
+
+Le meilleur modèle de prédiction selon la validation croisée est glm1_L2. C’est le modèle qui prend en compte de l’interaction entre les covariables.
+
+Je choisi donc glm1_L2 dans le but de prédiction sur le fichier ‘meteo.test.csv’ . Neanmoins, je remarque que les coefficients sous ce modèle sont difficiles à interprêter, et certaines sont biasés.
+
+| Modèle    | AIC     | Test Khi2 (Deviance) | Seuil Optimisé | Taux de Bonne Prediction |
+|-----------|---------|----------------------|----------------|--------------------------|
+| glm.backw | 1282.84 | 0.0415               | 0.5            | 0.738                    |
+| glm1_L1   | 1290.01 | 0.0244               | 0.53           | 0.740                    |
+| glm1_L2   | 1218.77 | 0.4221               | 0.53           | 0.749                    |
+|           |         |                      |                |                          |
+
+# Prédiction sur 'meteo.test.csv'
+
+```{r predict.meteo.test,echo=TRUE,results='hide'}
+meteo.predict=meteo.predict.initial %>% 
+  rename(
+    TEMP.Dmean.2m = Temperature.daily.mean..2.m.above.gnd.,
+    ReHumidity.Dmean.2m = Relative.Humidity.daily.mean..2.m.above.gnd.,
+    MSL.Pressure.Dmean = Mean.Sea.Level.Pressure.daily.mean..MSL.,
+    Ttl.Precipitation.Dsum = Total.Precipitation.daily.sum..sfc.,
+    Snowfall.Dsum = Snowfall.amount.raw.daily.sum..sfc.,
+    Ttl.Cld.Dmean = Total.Cloud.Cover.daily.mean..sfc.,
+    Highlay.Cld.Dmean = High.Cloud.Cover.daily.mean..high.cld.lay.,
+    Midlay.Cld.Dmean = Medium.Cloud.Cover.daily.mean..mid.cld.lay.,
+    Lowlay.Cld.Dmean = Low.Cloud.Cover.daily.mean..low.cld.lay.,
+    Sunshine.Dsum = Sunshine.Duration.daily.sum..sfc.,
+    Shortwave.Dsum = Shortwave.Radiation.daily.sum..sfc.,
+    WindSpeed.Dmean.10m = Wind.Speed.daily.mean..10.m.above.gnd.,
+    WindDirect.Dmean.10m = Wind.Direction.daily.mean..10.m.above.gnd.,
+    WindSpeed.Dmean.80m = Wind.Speed.daily.mean..80.m.above.gnd.,
+    WindDirect.Dmean.80m = Wind.Direction.daily.mean..80.m.above.gnd.,
+    WindSpeed.Dmean.900mb = Wind.Speed.daily.mean..900.mb.,
+    WindDirect.Dmean.900mb = Wind.Direction.daily.mean..900.mb.,
+    WindGust.Dmean = Wind.Gust.daily.mean..sfc.,
+    TEMP.Dmax.2m = Temperature.daily.max..2.m.above.gnd.,
+    TEMP.Dmin.2m = Temperature.daily.min..2.m.above.gnd.,
+    R.Humidity.Dmax.2m = Relative.Humidity.daily.max..2.m.above.gnd.,
+    R.Humidity.Dmin.2m = Relative.Humidity.daily.min..2.m.above.gnd.,
+    MSL.Pressure.Dmax = Mean.Sea.Level.Pressure.daily.max..MSL.,
+    MSL.Pressure.Dmin = Mean.Sea.Level.Pressure.daily.min..MSL.,
+    Ttl.Cld.Dmax = Total.Cloud.Cover.daily.max..sfc.,
+    Ttl.Cld.Dmin = Total.Cloud.Cover.daily.min..sfc.,
+    Highlay.Cld..Dmax = High.Cloud.Cover.daily.max..high.cld.lay.,
+    Highlay.Cld.Dmin = High.Cloud.Cover.daily.min..high.cld.lay.,
+    Midlay.Cld.Dmax = Medium.Cloud.Cover.daily.max..mid.cld.lay.,
+    Midlay.Cld.Dmin = Medium.Cloud.Cover.daily.min..mid.cld.lay.,
+    Lowlay.Cld.Dmax = Low.Cloud.Cover.daily.max..low.cld.lay.,
+    Lowlay.Cld.Dmin = Low.Cloud.Cover.daily.min..low.cld.lay.,
+    WindSpeed.Dmax.10m = Wind.Speed.daily.max..10.m.above.gnd.,
+    WindSpeed.Dmin.10m = Wind.Speed.daily.min..10.m.above.gnd.,
+    WindSpeed.Dmax.80m = Wind.Speed.daily.max..80.m.above.gnd.,
+    WindSpeed.Dmin.80m = Wind.Speed.daily.min..80.m.above.gnd.,
+    WindSpeed.Dmax.900mb = Wind.Speed.daily.max..900.mb.,
+    WindSpeed.Dmin.900mb = Wind.Speed.daily.min..900.mb.,
+    WindGust.Dmax = Wind.Gust.daily.max..sfc.,
+    WindGust.Dmin = Wind.Gust.daily.min..sfc.
+  )
+
+meteo.predict$pluie.demain.proba=predict(glm1_L2,newdata = meteo.predict,type = "response")
+meteo.predict$pluie.demain.predict=meteo.predict$pluie.demain.proba>=0.53
+meteo.predict.initial$pluie.demain.predict=meteo.predict$pluie.demain.predict
+write_csv(meteo.predict.initial, "C:\\Users\\ZQFX\\Desktop\\formation Data Science\\Cours Dauphine\\Modeles Lineaires Genarales - R. RYDER-20210919\\Projet RLG\\summit projet\\meteo.test_tovalidate.csv")
+```
+
